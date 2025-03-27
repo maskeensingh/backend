@@ -13,6 +13,10 @@ from PIL import Image
 from dotenv import load_dotenv
 import torch.nn as nn
 
+url="https://drive.google.com/uc?id=1w0mSk2-OZHFrMDYgSa2JSesF3JXHh0Jx"
+output=os.path.join("model", "skin_disease_model.pth")
+os.makedirs(os.path.dirname(output), exist_ok=True)
+gdown.download(url, output, quiet=False)
 # ------------------- Setup -------------------
 load_dotenv()
 
