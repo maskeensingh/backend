@@ -12,9 +12,10 @@ from dotenv import load_dotenv
 load_dotenv()
 
 app = Flask(__name__)
-CORS(app, resources={r"/*": {"origins": "http://localhost:3000"}})
-app.secret_key = os.getenv("SECRET_KEY", "supersecretkey")  # For session management
+# Allow all origins; adjust to your frontend domain if you prefer
+CORS(app, resources={r"/*": {"origins": "*"}})
 
+app.secret_key = os.getenv("SECRET_KEY", "supersecretkey")  # For session management
 socketio = SocketIO(app, cors_allowed_origins="*")
 
 # Load Google Gemini API Key
@@ -61,7 +62,6 @@ Return ONLY plain text questions separated by new lines.
 @app.route("/api/analyze", methods=["POST"])
 def analyze():
     text_description = request.form.get("description")
-    # Any image file provided will be ignored.
     final_predictions = []
 
     if text_description:
@@ -242,7 +242,6 @@ def on_signal(data):
 def index():
     if request.method == "POST":
         text_description = request.form.get("description")
-        # Any image file provided is ignored.
         final_predictions = []
         
         if text_description:
@@ -262,7 +261,10 @@ def followup():
         return redirect(url_for("index"))
     
     if request.method == "POST":
-        user_answers = {q: request.form.get(q, "No answer provided") for q in session["followup_questions"]}
+        user_answers = {
+            q: request.form.get(q, "No answer provided")
+            for q in session["followup_questions"]
+        }
         session["user_answers"] = user_answers
         return redirect(url_for("final_diagnosis_page"))
     
