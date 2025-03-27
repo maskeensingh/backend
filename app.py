@@ -1,23 +1,15 @@
 import os
 import json
 import time
-import torch
 import cv2
 import requests
+import base64
 import google.generativeai as genai
 from flask import Flask, request, render_template, session, redirect, url_for, Response, jsonify
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit, join_room
-from torchvision import transforms
 from PIL import Image
 from dotenv import load_dotenv
-import torch.nn as nn
-import gdown 
-url="https://drive.google.com/uc?id=1w0mSk2-OZHFrMDYgSa2JSesF3JXHh0Jx"
-output=os.path.join("model", "skin_disease_model.pth")
-os.makedirs(os.path.dirname(output), exist_ok=True)
-gdown.download(url, output, quiet=False)
-
 
 # ------------------- Setup -------------------
 load_dotenv()
@@ -37,77 +29,46 @@ genai.configure(api_key=GEMINI_API_KEY)
 # Google Maps API key for clinics lookup
 MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY")
 
-# ------------------- CNN Model Definition -------------------
-class SkinDiseaseCNN(nn.Module):
-    def __init__(self, num_classes=11):
-        super(SkinDiseaseCNN, self).__init__()
-        self.conv_layers = nn.Sequential(
-            nn.Conv2d(3, 32, kernel_size=3, stride=1, padding=1),
-            nn.ReLU(),
-            nn.MaxPool2d(kernel_size=2, stride=2),
-            nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1),
-            nn.ReLU(),
-            nn.MaxPool2d(kernel_size=2, stride=2),
-            nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=1),
-            nn.ReLU(),
-            nn.MaxPool2d(kernel_size=2, stride=2)
-        )
-        self.fc_layers = nn.Sequential(
-            nn.Flatten(),
-            nn.Linear(128 * 28 * 28, 512),
-            nn.ReLU(),
-            nn.Dropout(0.5),
-            nn.Linear(512, num_classes)
-        )
+# ------------------- Removed Local Model Code -------------------
+# The code for downloading and loading the CNN model has been removed.
+# We now use Gemini for image-based skin disease prediction.
 
-    def forward(self, x):
-        x = self.conv_layers(x)
-        x = self.fc_layers(x)
-        return x
-
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-model = SkinDiseaseCNN(num_classes=11)
-model_path = os.path.join("model", "skin_disease_model.pth")
-model.load_state_dict(torch.load(model_path, map_location=device))
-model.to(device)
-model.eval()
-
-# ------------------- Image Preprocessing -------------------
-def preprocess_image(image):
-    transform = transforms.Compose([
-        transforms.Resize((224, 224)),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
-    ])
-    img = Image.open(image).convert("RGB")
-    return transform(img).unsqueeze(0).to(device)
-
-# ------------------- Class Labels -------------------
-CLASS_NAMES = [
-    "Unknown", "Eczema", "Warts", "Melanoma", "Atopic Dermatitis", 
-    "BCC", "Melanocytic Nevi", "BKL", "Psoriasis", "Seborrheic Keratoses", "Tinea"
-]
-
-# ------------------- Prediction Helper Functions -------------------
+# ------------------- Image Prediction using Gemini -------------------
 def predict_disease_from_image(image):
-    img_tensor = preprocess_image(image)
-    with torch.no_grad():
-        outputs = model(img_tensor)
-        probabilities = torch.nn.functional.softmax(outputs, dim=1)
-        confidence, predicted_idx = torch.max(probabilities, 1)
-        predicted_class = predicted_idx.item()
-    disease = CLASS_NAMES[predicted_class] if 0 <= predicted_class < len(CLASS_NAMES) else "Unknown Disease"
-    return {"disease": disease, "score": round(confidence.item(), 2)}
+    """
+    Sends the image to Gemini for skin disease prediction.
+    Accepts either a file-like object (from a form upload) or a file path string.
+    """
+    if isinstance(image, str):
+        with open(image, "rb") as f:
+            image_data = f.read()
+    else:
+        image_data = image.read()
+        image.seek(0)  # Reset file pointer if possible
 
+    image_b64 = base64.b64encode(image_data).decode("utf-8")
+    prompt = f"""
+You are a dermatology expert. Analyze the following image (provided as a base64 encoded string) of a skin condition and predict the most likely skin disease.
+Return the result in JSON format with keys "disease" and "score", where score is a float between 0 and 1 indicating confidence.
+Image (base64): {image_b64}
+    """
+    response = genai.GenerativeModel("gemini-2.0-flash").generate_content(prompt).text.strip()
+    try:
+        result = json.loads(response)
+    except Exception:
+        result = {"disease": "Unknown", "score": 0.0}
+    return result
+
+# ------------------- Text Prediction using Gemini -------------------
 def predict_disease_from_text(description):
     prompt = f"""
-    You are a medical expert. Predict the top 5 possible skin diseases based on this description:
-    '{description}'
-    Return JSON format:
-    [
-        {{"disease": "Disease Name", "score": 0.8}},
-        {{"disease": "Another Disease", "score": 0.6}}
-    ]
+You are a medical expert. Predict the top 5 possible skin diseases based on this description:
+'{description}'
+Return JSON format:
+[
+    {{"disease": "Disease Name", "score": 0.8}},
+    {{"disease": "Another Disease", "score": 0.6}}
+]
     """
     response = genai.GenerativeModel("gemini-2.0-flash").generate_content(prompt).text
     try:
@@ -117,10 +78,10 @@ def predict_disease_from_text(description):
 
 def generate_followup_questions(predictions):
     prompt = f"""
-    Given these possible skin diseases based on text and image inputs:
-    {json.dumps(predictions, indent=2)}
-    Generate 3-5 follow-up medical questions to refine the final diagnosis.
-    Return ONLY plain text questions separated by new lines.
+Given these possible skin diseases based on text and image inputs:
+{json.dumps(predictions, indent=2)}
+Generate 3-5 follow-up medical questions to refine the final diagnosis.
+Return ONLY plain text questions separated by new lines.
     """
     response = genai.GenerativeModel("gemini-2.0-flash").generate_content(prompt).text
     questions = response.strip().split("\n")
@@ -193,12 +154,12 @@ def final_diagnosis_api():
     user_answers = data.get("user_answers", {})
 
     prompt = f"""
-    Based on these AI predictions:
-    {json.dumps(predictions, indent=2)}
-    And user responses:
-    {json.dumps(user_answers, indent=2)}
-    Determine the final skin disease.
-    Return ONLY the final disease name in plain text.
+Based on these AI predictions:
+{json.dumps(predictions, indent=2)}
+And user responses:
+{json.dumps(user_answers, indent=2)}
+Determine the final skin disease.
+Return ONLY the final disease name in plain text.
     """
     
     final_disease = genai.GenerativeModel("gemini-2.0-flash").generate_content(prompt).text.strip()
@@ -230,7 +191,7 @@ Respond using this exact format. Each section should have **2–3 short bullet p
 **When to See a Doctor:**
 • [Early warning sign]
 • [Progression or worsening symptom]
-"""
+    """
     
     try:
         treatment_response = genai.GenerativeModel("gemini-2.0-flash").generate_content(treatment_prompt).text.strip()
@@ -251,7 +212,6 @@ def find_clinics():
     range_km = data.get("range", 20)
     radius = range_km * 1000
 
-    # Convert location string to coordinates if needed
     if isinstance(user_location, str):
         geocode_url = f"https://maps.googleapis.com/maps/api/geocode/json?address={user_location}&key={MAPS_API_KEY}"
         geocode_response = requests.get(geocode_url)
@@ -263,7 +223,6 @@ def find_clinics():
     else:
         lat, lng = user_location.get("lat"), user_location.get("lng")
     
-    # Define hospital categories and their keywords
     categories = {
         "NGO": "NGO hospital",
         "Government": " skin government hospital",
@@ -301,7 +260,6 @@ def find_clinics():
             }
             clinics.append(clinic)
     
-    # Sort clinics by category order: NGO, Government, then Private
     sorted_order = ["NGO", "Government", "Private"]
     clinics.sort(key=lambda x: sorted_order.index(x["category"]) if x["category"] in sorted_order else 999)
     
@@ -326,7 +284,7 @@ Focus on:
 
 If the question isn't about women's health, politely decline.
 Return your response in **plain text** only.
-"""
+    """
     
     try:
         response = genai.GenerativeModel("gemini-2.0-flash").generate_content(prompt).text.strip()
@@ -393,17 +351,15 @@ def final_diagnosis_page():
     if "predictions" not in session or "user_answers" not in session:
         return redirect(url_for("index"))
     
-    # Step 1: Ask Gemini to determine the final disease
     prompt = f"""
-    Based on these AI predictions:
-    {json.dumps(session["predictions"], indent=2)}
-    And user responses:
-    {json.dumps(session["user_answers"], indent=2)}
-    Determine the final skin disease. Return ONLY the final disease name in plain text.
+Based on these AI predictions:
+{json.dumps(session["predictions"], indent=2)}
+And user responses:
+{json.dumps(session["user_answers"], indent=2)}
+Determine the final skin disease. Return ONLY the final disease name in plain text.
     """
     final_disease = genai.GenerativeModel("gemini-2.0-flash").generate_content(prompt).text.strip()
 
-    # Step 2: Ask Gemini to return a concise, structured treatment plan
     treatment_prompt = f"""
 You are a medical assistant. Provide a structured and easy-to-understand treatment plan for the following skin condition:
 
@@ -431,14 +387,13 @@ Respond using this exact format. Each section should have **2–3 short bullet p
 **When to See a Doctor:**
 • [Early warning sign]
 • [Progression or worsening symptom]
-"""
+    """
     
     try:
         treatment_response = genai.GenerativeModel("gemini-2.0-flash").generate_content(treatment_prompt).text.strip()
     except Exception:
         treatment_response = "⚠️ Unable to fetch treatment details. Please consult a dermatologist."
 
-    # Store and render
     session["final_disease"] = final_disease
     return render_template(
         "final_diagnosis.html",
@@ -486,5 +441,4 @@ def video_feed():
 # ------------------- Main Entry Point -------------------
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))  # Use PORT environment variable if available (for Render deployment)
-    # Note: Keeping socketio.run as is to preserve Socket.IO functionality.
     socketio.run(app, host="0.0.0.0", port=port, debug=False)
