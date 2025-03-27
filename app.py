@@ -1,14 +1,11 @@
 import os
 import json
 import time
-import cv2
 import requests
-import base64
 import google.generativeai as genai
-from flask import Flask, request, render_template, session, redirect, url_for, Response, jsonify
+from flask import Flask, request, render_template, session, redirect, url_for, jsonify
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit, join_room
-from PIL import Image
 from dotenv import load_dotenv
 
 # ------------------- Setup -------------------
@@ -29,36 +26,6 @@ genai.configure(api_key=GEMINI_API_KEY)
 # Google Maps API key for clinics lookup
 MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY")
 
-# ------------------- Removed Local Model Code -------------------
-# The code for downloading and loading the CNN model has been removed.
-# We now use Gemini for image-based skin disease prediction.
-
-# ------------------- Image Prediction using Gemini -------------------
-def predict_disease_from_image(image):
-    """
-    Sends the image to Gemini for skin disease prediction.
-    Accepts either a file-like object (from a form upload) or a file path string.
-    """
-    if isinstance(image, str):
-        with open(image, "rb") as f:
-            image_data = f.read()
-    else:
-        image_data = image.read()
-        image.seek(0)  # Reset file pointer if possible
-
-    image_b64 = base64.b64encode(image_data).decode("utf-8")
-    prompt = f"""
-You are a dermatology expert. Analyze the following image (provided as a base64 encoded string) of a skin condition and predict the most likely skin disease.
-Return the result in JSON format with keys "disease" and "score", where score is a float between 0 and 1 indicating confidence.
-Image (base64): {image_b64}
-    """
-    response = genai.GenerativeModel("gemini-2.0-flash").generate_content(prompt).text.strip()
-    try:
-        result = json.loads(response)
-    except Exception:
-        result = {"disease": "Unknown", "score": 0.0}
-    return result
-
 # ------------------- Text Prediction using Gemini -------------------
 def predict_disease_from_text(description):
     prompt = f"""
@@ -78,7 +45,7 @@ Return JSON format:
 
 def generate_followup_questions(predictions):
     prompt = f"""
-Given these possible skin diseases based on text and image inputs:
+Given these possible skin diseases based on the text input:
 {json.dumps(predictions, indent=2)}
 Generate 3-5 follow-up medical questions to refine the final diagnosis.
 Return ONLY plain text questions separated by new lines.
@@ -87,40 +54,6 @@ Return ONLY plain text questions separated by new lines.
     questions = response.strip().split("\n")
     return [q for q in questions if q.strip() != ""]
 
-# ------------------- Global Variables for Live AR -------------------
-LIVE_AR_MODE = False
-last_update_time = time.time()
-last_prediction = None
-
-# ------------------- Webcam Initialization -------------------
-camera = cv2.VideoCapture(0)
-
-def generate_frames():
-    global last_update_time, last_prediction, LIVE_AR_MODE
-    while True:
-        success, frame = camera.read()
-        if not success:
-            break
-        if LIVE_AR_MODE and (time.time() - last_update_time > 3):
-            temp_path = f"temp_frame_{int(time.time()*1000)}.jpg"
-            cv2.imwrite(temp_path, frame)
-            last_prediction = predict_disease_from_image(temp_path)
-            os.remove(temp_path)
-            last_update_time = time.time()
-        
-        if last_prediction:
-            text = f"{last_prediction['disease']} ({last_prediction['score']})"
-            cv2.putText(frame, text, (10, 40), cv2.FONT_HERSHEY_SIMPLEX,
-                        1, (0, 255, 0), 2, cv2.LINE_AA)
-        if LIVE_AR_MODE and "followup_questions" in session and session["followup_questions"]:
-            questions = session["followup_questions"]
-            cv2.putText(frame, questions[0], (10, 80), cv2.FONT_HERSHEY_SIMPLEX,
-                        0.7, (255, 0, 0), 2, cv2.LINE_AA)
-        ret, buffer = cv2.imencode('.jpg', frame)
-        frame = buffer.tobytes()
-        yield (b'--frame\r\n'
-               b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
-
 # ------------------------------------------------------------------------------
 #  API Endpoints
 # ------------------------------------------------------------------------------
@@ -128,17 +61,12 @@ def generate_frames():
 @app.route("/api/analyze", methods=["POST"])
 def analyze():
     text_description = request.form.get("description")
-    image_file = request.files.get("image")
-    
+    # Any image file provided will be ignored.
     final_predictions = []
 
     if text_description:
         text_predictions = predict_disease_from_text(text_description)
         final_predictions.extend(text_predictions)
-
-    if image_file:
-        image_prediction = predict_disease_from_image(image_file)
-        final_predictions.append(image_prediction)
 
     followup_questions = generate_followup_questions(final_predictions)
 
@@ -203,8 +131,6 @@ Respond using this exact format. Each section should have **2–3 short bullet p
         "treatment": treatment_response
     })
 
-
-# ------------- Modified Clinics Lookup Endpoint ----------------
 @app.route("/api/find_clinics", methods=["POST"])
 def find_clinics():
     data = request.json
@@ -316,20 +242,16 @@ def on_signal(data):
 def index():
     if request.method == "POST":
         text_description = request.form.get("description")
-        image_file = request.files.get("image")
+        # Any image file provided is ignored.
         final_predictions = []
         
         if text_description:
             text_predictions = predict_disease_from_text(text_description)
             final_predictions.extend(text_predictions)
         
-        if image_file:
-            image_prediction = predict_disease_from_image(image_file)
-            final_predictions.append(image_prediction)
-        
         session["predictions"] = final_predictions
         session["followup_questions"] = generate_followup_questions(final_predictions)
-        session["detection_mode"] = "Image/Text"
+        session["detection_mode"] = "Text Only"
         return redirect(url_for("followup"))
     
     return render_template("index.html")
@@ -399,7 +321,7 @@ Respond using this exact format. Each section should have **2–3 short bullet p
         "final_diagnosis.html",
         final_disease=final_disease,
         treatment=treatment_response,
-        detection_mode=session.get("detection_mode", "Image/Text")
+        detection_mode=session.get("detection_mode", "Text Only")
     )
 
 @app.route("/treatment", methods=["GET"])
@@ -409,36 +331,7 @@ def treatment():
     treatment_plan = genai.GenerativeModel("gemini-2.0-flash").generate_content(treatment_prompt).text
     return render_template("treatment.html", final_disease=final_disease, treatment=treatment_plan)
 
-@app.route("/live_ar", methods=["GET", "POST"])
-def live_ar():
-    global LIVE_AR_MODE
-    if request.method == "POST":
-        mode = request.form.get("mode")
-        LIVE_AR_MODE = (mode == "live")
-        session["detection_mode"] = "Live AR"
-        return redirect(url_for("live_ar"))
-    return render_template("live_ar.html", live_mode=LIVE_AR_MODE)
-
-@app.route("/capture", methods=["POST"])
-def capture():
-    success, frame = camera.read()
-    if success:
-        capture_filename = f"static/captured_skin_{int(time.time()*1000)}.jpg"
-        cv2.imwrite(capture_filename, frame)
-        session['captured_image'] = capture_filename
-        image_prediction = predict_disease_from_image(capture_filename)
-        os.remove(capture_filename)
-        session["predictions"] = [image_prediction]
-        session["followup_questions"] = generate_followup_questions([image_prediction])
-        session["detection_mode"] = "Live AR"
-        return jsonify({"success": True, "redirect_url": url_for("followup")})
-    return jsonify({"success": False})
-
-@app.route("/video_feed")
-def video_feed():
-    return Response(generate_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
-
 # ------------------- Main Entry Point -------------------
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))  # Use PORT environment variable if available (for Render deployment)
+    port = int(os.environ.get("PORT", 5000))
     socketio.run(app, host="0.0.0.0", port=port, debug=False)
