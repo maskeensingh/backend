@@ -1,0 +1,77 @@
+# Streamlit for building the web application
+streamlit==1.41.1
+
+# LangChain for language model chaining
+langchain
+
+# LangChain Community for additional community-driven functionalities
+langchain-community  # Newly added dependency
+
+# OpenAI API for interacting with OpenAI models
+openai==1.60.1
+
+# Transformers for advanced NLP models
+transformers==4.48.1
+
+# SentenceTransformers for sentence embeddings
+sentence-transformers==3.4.0
+
+# FAISS for efficient similarity search
+faiss-cpu==1.9.0.post1
+
+# PyMuPDF for PDF processing
+PyMuPDF==1.25.2
+
+# PyTorch for deep learning
+torch==2.0.1
+
+# TorchVision for image processing
+torchvision==0.15.2
+
+# Pillow for image manipulation
+pillow==9.4.0
+
+# Google Maps API integration
+googlemaps==4.5.3  # Updated from 4.5.6 to a valid version
+
+# Geopy for geocoding services
+geopy==2.3.0
+
+# Streamlit-Folium for embedding Folium maps in Streamlit
+streamlit-folium==0.7.0  # Updated from 0.1.0 to resolve previous ImportError
+
+# Tiktoken for tokenization (used by OpenAI models)
+tiktoken==0.4.0
+
+# Python-dotenv for managing environment variables
+python-dotenv==1.0.0  # Ensure correct package name
+
+
+
+# Additional dependencies not previously listed
+grpcio==1.69.0  # Required for gRPC communication
+pandas==2.2.3  # Data manipulation and analysis
+langchain-groq==0.2.3  # Additional LangChain functionalities
+langchain-core==0.3.29  # Core functionalities for LangChain
+google-generativeai==0.8.3  # Integration with Google's generative AI models
+requests==2.32.3  # HTTP requests handling
+folium==0.19.4  # Interactive maps
+scipy==1.13.1  # Scientific computing
+numpy==1.26.4  # Numerical operations
+
+# Dependencies to resolve additional import issues
+dataclasses-json==0.6.7  # Required by langchain-community for JSON serialization
+
+# 🌟 EXTRA DEPENDENCIES ADDED FOR YOUR PROJECT 🌟
+
+# Flask for building the web application
+flask==3.0.2
+
+# Werkzeug for handling WSGI requests in Flask
+werkzeug==3.0.2
+
+# Jinja2 for rendering HTML templates in Flask
+jinja2==3.1.3
+
+# Flask-CORS to handle cross-origin requests (if needed)
+flask-cors==4.0.1
